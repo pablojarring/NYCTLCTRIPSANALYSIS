@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  spark-notebook:
+    build: .
+    container_name: spark-notebook
+    ports:
+      - "8888:8888"
+      - "4040:4040"
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+    env_file:
+      - .env
+    volumes:
+      - ./notebooks:/home/jovyan/work
+      - ./jars:/home/jovyan/jars
+      - ./data:/home/jovyan/data
+      - ./evidencias:/home/jovyan/evidencias
+    command: >
+      bash -c "
+        pip install snowflake-connector-python[pandas] requests &&
+        start-notebook.sh --NotebookApp.token=''
+      "
+    restart: unless-stopped
+
+networks:
+  default:
+    name: dm_p3_network

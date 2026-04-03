@@ -1,0 +1,19 @@
+# Snowflake 
+snowflake-connector-python==3.10.0
+snowflake-sqlalchemy==1.5.3
+
+# Spark / Datos 
+pyarrow==14.0.2
+pandas==2.2.2
+numpy==1.26.4
+fastparquet==2024.2.0
+
+# HTTP / Utilidades 
+requests==2.31.0
+python-dotenv==1.0.1
+tqdm==4.66.2
+
+# Jupyter / Visualización 
+ipywidgets==8.1.2
+matplotlib==3.8.4
+seaborn==0.13.2

@@ -1,0 +1,25 @@
+# Secretos
+.env
+
+# Datos (pesados) 
+data/
+jars/
+*.parquet
+*.csv
+*.zip
+
+# Python 
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.ipynb_checkpoints/
+
+# Docker 
+*.log
+docker-compose.override.yml
+
+# OS 
+.DS_Store
+Thumbs.db
