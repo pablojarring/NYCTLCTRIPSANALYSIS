@@ -221,11 +221,11 @@ Proyecto-3/
 
 ## Checklist de aceptación
 
-- [ ] Docker Compose levanta Spark y Jupyter Notebook
-- [ ] Todas las credenciales/parámetros provienen de variables de ambiente (.env)
+- [x] Docker Compose levanta Spark y Jupyter Notebook
+- [x] Todas las credenciales/parámetros provienen de variables de ambiente (.env)
 - [ ] Cobertura 2015–2025 (Yellow/Green) cargada en RAW con matriz y conteos por lote
-- [ ] `ANALYTICS.OBT_TRIPS` creada con columnas mínimas, derivadas y metadatos
+- [x] `ANALYTICS.OBT_TRIPS` creada con columnas mínimas, derivadas y metadatos
 - [ ] Idempotencia verificada reingestando al menos un mes
-- [ ] Validaciones básicas documentadas (nulos, rangos, coherencia)
+- [x] Validaciones básicas documentadas (nulos, rangos, coherencia)
 - [ ] 20 preguntas respondidas usando la OBT
-- [ ] README claro: pasos, variables, esquema, decisiones, troubleshooting
+- [x] README claro: pasos, variables, esquema, decisiones, troubleshooting
