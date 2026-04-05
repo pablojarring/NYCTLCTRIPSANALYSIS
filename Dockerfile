@@ -15,10 +15,5 @@ RUN curl -L -o /usr/local/spark/jars/spark-snowflake.jar \
 
 USER jovyan
 
-RUN pip install --no-cache-dir --default-timeout=100 pandas==2.2.2 pyarrow==14.0.2
-
-RUN pip install --no-cache-dir --default-timeout=100 \
-    snowflake-connector-python==3.10.0 \
-    python-dotenv==1.0.1 \
-    tqdm==4.66.2 \
-    requests==2.31.0
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --default-timeout=100 -r /tmp/requirements.txt

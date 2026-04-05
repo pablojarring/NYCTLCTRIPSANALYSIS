@@ -16,11 +16,7 @@ services:
       - ./jars:/home/jovyan/jars
       - ./data:/home/jovyan/data
       - ./evidencias:/home/jovyan/evidencias
-    command: >
-      bash -c "
-        pip install snowflake-connector-python[pandas] requests &&
-        start-notebook.sh --NotebookApp.token=''
-      "
+    command: start-notebook.sh --NotebookApp.token=''
     restart: unless-stopped
 
 networks:
