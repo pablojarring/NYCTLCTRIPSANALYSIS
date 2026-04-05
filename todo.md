@@ -32,9 +32,9 @@ El entregable exige que se respondan 20 preguntas de negocio utilizando la OBT.
 
 ## 6. Otros
 - [ ] Leer las instrucciones
-- [ ] Decidir si el notebook 2 deberia limpiar de verdad los datos
-- [ ] Resolver problema de memoria
+- [x] Decidir si el notebook 2 deberia limpiar de verdad los datos
+- [x] Resolver problema de memoria
 - [ ] Determinar si cambiar bloques de sql por spark
 - [ ] Colocación de comandos para medición de tiempos (Comparacion Cluster con indices vs no Cluster)
 - [ ] Agregar descarte de valores en proceso de limpieza
-- [ ] Asegurarse de ingesta completa
+- [x] Asegurarse de ingesta completa
