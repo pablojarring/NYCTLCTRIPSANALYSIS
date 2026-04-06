@@ -1,6 +1,6 @@
 # Snowflake 
 snowflake-snowpark-python
-snowflake-connector-python[pandas]==3.10.0
+snowflake-connector-python[pandas]
 snowflake-sqlalchemy==1.5.3
 
 # Spark / Datos 
