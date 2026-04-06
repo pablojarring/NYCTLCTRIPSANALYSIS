@@ -1,231 +1,205 @@
-# Proyecto 03 — NYC Taxi Data Pipeline (Spark + Snowflake)
+# Data Mining — PSet03: NYC TLC Trips con Spark y Snowflake
 
-**Universidad San Francisco de Quito — Data Mining**
+## Autores
+Carlos Flores
+Omar Gordillo
+Pablo Jarrin
+Alex Luna
+Andrés Vega
 
-## Arquitectura
 
-```
-┌─────────────────────┐     ┌───────────────────────────────┐     ┌──────────────────────────┐
-│  NYC TLC Parquet     │     │  Docker: spark-notebook       │     │  Snowflake               │
-│  (2015–2025)         │────▶│  Jupyter + PySpark            │────▶│                          │
-│  Yellow + Green      │     │  Puerto 8888 (Jupyter)        │     │  NYC_TAXI_P3.RAW         │
-│                      │     │  Puerto 4040 (Spark UI)       │     │    ├─ TRIPS_RAW          │
-└─────────────────────┘     └───────────────────────────────┘     │    ├─ TAXI_ZONE_LOOKUP   │
-                                                                    │    └─ INGESTION_LOG      │
-                                                                    │                          │
-                                                                    │  NYC_TAXI_P3.ANALYTICS   │
-                                                                    │    └─ OBT_TRIPS          │
-                                                                    └──────────────────────────┘
-```
+## Tabla de contenidos
+1. [Requisitos previos](#requisitos-previos)
+2. [Variables de ambiente](#variables-de-ambiente)
+3. [Levantar la infraestructura](#levantar-la-infraestructura)
+4. [Ejecución de notebooks](#ejecución-de-notebooks)
+5. [Diseño de esquemas en Snowflake](#diseño-de-esquemas-en-snowflake)
+6. [One Big Table (OBT)](#one-big-table-obt)
+7. [Calidad y auditoría](#calidad-y-auditoría)
+8. [Matriz de cobertura 2015–2025](#matriz-de-cobertura-20152025)
+9. [Manejo de problemas](#manejo-de-problemas)
 
-**Flujo:** Parquet (2015–2025, Yellow/Green) → Spark (backfill mensual) → Snowflake RAW → enriquecimiento/unificación → ANALYTICS.OBT_TRIPS (One Big Table)
 
-## Objetos en Snowflake
+## Requisitos previos
 
-| Objeto | Nombre completo | Descripción |
-|--------|----------------|-------------|
-| Database | `NYC_TAXI_P3` | Base de datos del proyecto |
-| Schema | `NYC_TAXI_P3.RAW` | Aterrizaje espejo del origen |
-| Schema | `NYC_TAXI_P3.ANALYTICS` | Tabla analítica OBT |
-| Table | `RAW.TRIPS_RAW` | Viajes yellow+green con metadatos de ingesta |
-| Table | `RAW.TAXI_ZONE_LOOKUP` | Mapeo LocationID → zona/borough |
-| Table | `RAW.INGESTION_LOG` | Auditoría de cada carga mensual |
-| Table | `ANALYTICS.OBT_TRIPS` | One Big Table desnormalizada |
+- Docker y Docker Compose instalados
+- Cuenta activa en Snowflake
+- Acceso a internet para descargar los archivos Parquet de NYC TLC
+
 
 ## Variables de ambiente
 
-Definidas en `.env` (gitignored) y `.env.example` (committed):
+Copia `.env.example` a `.env` y completa con las credenciales reales.
 
-| Variable | Propósito |
-|----------|-----------|
-| `SF_ACCOUNT` | Identificador de cuenta Snowflake |
-| `SF_USER` | Usuario Snowflake |
-| `SF_PASSWORD` | Contraseña Snowflake |
-| `SF_WAREHOUSE` | Warehouse de cómputo |
-| `SF_DATABASE` | Base de datos (`NYC_TAXI_P3`) |
-| `SF_SCHEMA_RAW` | Esquema raw (`RAW`) |
-| `SF_SCHEMA_ANALYTICS` | Esquema analytics (`ANALYTICS`) |
-| `SF_ROLE` | Rol de Snowflake |
-| `PARQUET_BASE_URL` | URL base de archivos Parquet |
-| `TAXI_ZONE_URL` | URL del CSV de Taxi Zone Lookup |
-| `YEAR_START` / `YEAR_END` | Rango de años a procesar |
-| `MONTH_START` / `MONTH_END` | Rango de meses a procesar |
-| `SERVICES` | Servicios a procesar (`yellow,green`) |
-| `RUN_ID` | Identificador único de ejecución |
-| `BATCH_SIZE` | Tamaño de lote |
-| `ENABLE_VALIDATION` | Flag de validación |
+```bash
+cp .env.example .env
+```
 
-## Diseño del esquema RAW
+### `.env.example`
 
-### `TRIPS_RAW`
-Tabla unificada para Yellow y Green con todas las columnas de ambos esquemas:
-- **Yellow:** `tpep_pickup_datetime`, `tpep_dropoff_datetime`
-- **Green:** `lpep_pickup_datetime`, `lpep_dropoff_datetime`, `trip_type`, `ehail_fee`
-- **Comunes:** `VendorID`, `passenger_count`, `trip_distance`, `PULocationID`, `DOLocationID`, tarifas
-- **Metadatos de ingesta:** `run_id`, `service_type`, `source_year`, `source_month`, `ingested_at_utc`, `source_path`
+```dotenv
+# ==============================
+# Snowflake Configuration
+# ==============================
+SF_ACCOUNT=your_account
+SF_USER=your_user
+SF_PASSWORD=your_password
+SF_WAREHOUSE=your_warehouse
+SF_DATABASE=your_database
+SF_SCHEMA_RAW=your_raw_schema
+SF_SCHEMA_ANALYTICS=your_analytics_schema
+SF_ROLE=your_role
 
-### `INGESTION_LOG`
-Registro de auditoría por cada mes/servicio cargado:
-- `run_id`, `service_type`, `source_year`, `source_month`
-- `rows_loaded`, `rows_in_source`, `status`, `error_message`
-- `started_at_utc`, `finished_at_utc`
+# ==============================
+# Data Sources
+# ==============================
+PARQUET_BASE_URL=https://d37ci6vzurychx.cloudfront.net/trip-data
+TAXI_ZONE_URL=https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv
 
-### Idempotencia (RAW)
-Estrategia: **DELETE + INSERT** por clave natural `(service_type, source_year, source_month)`.
-Antes de cargar un mes, se eliminan las filas existentes para ese mes/servicio.
+# ==============================
+# Date Range Configuration
+# ==============================
+YEAR_START=2015
+YEAR_END=2025
+MONTH_START=1
+MONTH_END=12
 
-## Diseño de la OBT (`ANALYTICS.OBT_TRIPS`)
+# ==============================
+# Pipeline Settings
+# ==============================
+SERVICES=yellow,green
+RUN_ID=backfill-YYYY-MM
+BATCH_SIZE=500000
+ENABLE_VALIDATION=true
+```
 
-**Grano:** 1 fila = 1 viaje.
+## Levantar la infraestructura
 
-| Categoría | Columnas |
-|-----------|----------|
-| **Tiempo** | `pickup_datetime`, `dropoff_datetime`, `pickup_date`, `pickup_hour`, `dropoff_date`, `dropoff_hour`, `day_of_week`, `month`, `year` |
-| **Ubicación** | `pu_location_id`, `pu_zone`, `pu_borough`, `do_location_id`, `do_zone`, `do_borough` |
-| **Servicio/Códigos** | `service_type`, `vendor_id`, `vendor_name`, `rate_code_id`, `rate_code_desc`, `payment_type`, `payment_type_desc`, `trip_type` |
-| **Viaje** | `passenger_count`, `trip_distance`, `store_and_fwd_flag` |
-| **Tarifas** | `fare_amount`, `extra`, `mta_tax`, `tip_amount`, `tolls_amount`, `improvement_surcharge`, `congestion_surcharge`, `airport_fee`, `total_amount` |
-| **Derivadas** | `trip_duration_min`, `avg_speed_mph`, `tip_pct` |
-| **Lineage** | `run_id`, `ingested_at_utc`, `source_service`, `source_year`, `source_month` |
+```bash
+# Clonar el repositorio
+git clone <url-del-repo>
+cd <nombre-del-repo>
+# Crear el archivo .env con tus credenciales
+cp .env.example .env
+# Edita .env con los valores reales
+# Levantar los servicios
+docker compose up -d
+# Verificar que los contenedores estén corriendo
+docker compose ps
+```
 
-### Derivadas — reglas de cálculo
+Una vez levantado, se accede a:
+- **Jupyter:** [http://localhost:8888](http://localhost:8888)
+- **Spark UI:** [http://localhost:4040](http://localhost:4040)
 
-| Columna | Fórmula | Manejo de nulos/ceros |
-|---------|---------|----------------------|
-| `trip_duration_min` | `DATEDIFF('minute', pickup_datetime, dropoff_datetime)` | NULL si algún datetime es NULL |
-| `avg_speed_mph` | `trip_distance / (trip_duration_min / 60)` | NULL si duración ≤ 0 o distancia ≤ 0 |
-| `tip_pct` | `(tip_amount / fare_amount) × 100` | NULL si fare_amount ≤ 0 |
 
-### Idempotencia (OBT)
-Estrategia: **mode=overwrite** — reconstrucción completa en cada ejecución.
+Para detener los servicios hay que hacer un:
+```bash
+docker compose down
+```
+
+
+## Ejecución de notebooks
+
+Se ecjecutan los notebooks en orden desde Jupyter, una vez levantado el contenedor. Todos leen sus parámetros desde variables de ambiente. El orden es el siguiente:
+
+1. 01_ingesta_parquet_raw.ipynb
+Descarga y carga los archivos Parquet (2015–2025) de servicios Yellow y Green hacia el esquema raw en Snowflake. Procesa los datos mes a mes y registra conteos por lote junto con metadatos de auditoría. 
+
+2. 02_enriquecimiento_y_unificacion.ipynb
+Realiza el enriquecimiento de datos uniendo con el Taxi Zone Lookup.
+Normaliza catálogos como payment_type, rate_code y vendor, y unifica los datasets Yellow y Green en una vista intermedia.
+
+3. 03_construccion_obt.ipynb
+Construye la tabla analytics.obt_trips, incorporando columnas derivadas y metadatos de lineage.
+Incluye pruebas de idempotencia mediante la reingesta de un mes de prueba.
+
+4. 04_validaciones_y_exploracion.ipynb
+Ejecuta validaciones de calidad: detección de nulos, verificación de rangos, coherencia de fechas y conteos por mes/servicio.
+Genera un reporte de calidad de datos.
+
+5. 05_data_analysis.ipynb
+Responde las 20 preguntas de negocio utilizando la tabla analytics.obt_trips mediante consultas en Spark SQL.
+
+
+## Diseño de esquemas en Snowflake
+
+### Esquema raw
+
+Las tablas están particionadas lógicamente por tipo de servicio (yellow y green). Cada registro incluye los siguientes metadatos de ingesta:
+	•	run_id: Identificador único de la corrida del pipeline.
+	•	service_type: Tipo de servicio (yellow o green).
+	•	source_year: Año del archivo Parquet de origen.
+	•	source_month: Mes del archivo Parquet de origen.
+	•	source_path: URL o ruta del archivo Parquet utilizado.
+	•	ingested_at_utc: Timestamp de ingesta en formato UTC.
+
+Idempotencia: Antes de insertar cada mes, se elimina el lote anterior con el mismo (service_type, source_year, source_month). Esto garantiza que reingestar un mes no duplique filas.
+
+
+## One Big Table (OBT)
+
+### OBT
+
+La OBT desnormaliza todas las dimensiones (zonas, catálogos, derivadas) en una sola tabla para:
+
+- Eliminar JOINs en tiempo de consulta, esto hace que haya menor latencia y menor riesgo de errores de cardinalidad.
+- Facilitar la generación del prototipo, hacerlo más rápido, por analistas/BI.
+- Servir como una especie de fuente de verdad para las 20 preguntas de negocio.
+
+Indempotencia: Antes de insertar cualquier mes, se verifica y elimina el lote existente
+
+
+### Limitaciones y como se manejaron
+
+El enfoque presenta algunas limitaciones que han sido mitigadas de forma práctica. Por un lado, el mayor almacenamiento debido a la duplicación de datos se controla incluyendo únicamente las columnas realmente útiles. Además, los cambios en los catálogos, que podrían requerir la reconstrucción de la OBT, se manejan mediante notebooks reproducibles que permiten hacer rebuild por partición (por mes). El crecimiento en volumen se aborda mediante un particionado lógico por year y month, junto con tareas de mantenimiento periódico en Snowflake para asegurar un rendimiento adecuado.
+
 
 ## Calidad y auditoría
 
-Validaciones aplicadas en `04_validaciones_y_exploracion.ipynb`:
+Se implementaron múltiples reglas de calidad para asegurar la consistencia de los datos durante la ingesta. Los registros con valores nulos en pickup_datetime o dropoff_datetime son descartados y registrados en la tabla de auditoría, mientras que aquellos donde dropoff_datetime es menor que pickup_datetime también se eliminan. De igual forma, se descartan registros con trip_distance negativa o con valores negativos en fare_amount o total_amount. En el caso de trip_duration_min, si el valor es menor a 0 o mayor a 1440 minutos (24 horas), el registro se conserva pero se marca como outlier. Además, los registros con pu_location_id o do_location_id nulos son descartados.
 
-| Regla | Qué se valida |
-|-------|---------------|
-| Nulos esenciales | `pickup_datetime`, `pu_location_id`, `service_type`, `total_amount`, `run_id` |
-| Rangos lógicos | `trip_duration_min ≥ 0`, `trip_distance ≥ 0`, `total_amount ≥ 0` |
-| Coherencia fechas | `dropoff_datetime ≥ pickup_datetime` |
-| Outliers | Duración > 24h, distancia > 500 mi, velocidad > 100 mph, propina > 100% |
-| Cobertura | Conteos por `service_type` / `year` / `month` |
-| Auditoría | `INGESTION_LOG`: filas cargadas, status, tiempos por cada mes/servicio |
+Para el control y trazabilidad del proceso, se mantiene una tabla de auditoría llamada raw.ingestion_audit, que registra información clave de cada corrida del pipeline. Esta incluye el identificador de la corrida (run_id), el tipo de servicio (service_type), el año y mes procesados (source_year, source_month), la cantidad de filas leídas desde los archivos Parquet (rows_read), las filas insertadas en la capa raw (rows_inserted), las filas descartadas por reglas de calidad (rows_discarded), la duración del proceso de carga en segundos (load_duration_sec) y el timestamp de la ingesta en UTC (ingested_at_utc).
 
-## Notebooks (orden de ejecución)
 
-| # | Archivo | Propósito |
-|---|---------|-----------|
-| 1 | `01_ingest_raw.ipynb` | Descarga Parquet 2015–2025 (Yellow/Green), carga Taxi Zones, escribe a RAW con auditoría. Idempotente. |
-| 2 | `02_enriquecimiento_y_unificacion.ipynb` | Explora RAW, muestra JOIN con zonas, unificación Yellow/Green, normalización de catálogos. |
-| 3 | `03_construccion_obt.ipynb` | Construye `OBT_TRIPS` con derivadas y metadatos. Verifica idempotencia. |
-| 4 | `04_validaciones_y_exploracion.ipynb` | Validaciones de calidad: nulos, rangos, coherencia, outliers, cobertura. |
-| 5 | `05_data_analysis.ipynb` | 20 preguntas de negocio respondidas con Spark sobre la OBT. |
 
 ## Matriz de cobertura 2015–2025
 
-> **Nota:** Completar esta tabla después de ejecutar notebook 01. Marcar ✅ (ok), ❌ (falta), ⚠️ (fallido).
+✅ = Cargado correctamente, ⚠️ = Parcial o con advertencias, ❌ = Falta o fallido
 
-| Año | Yellow | Green |
-|-----|--------|-------|
-| 2015 | | |
-| 2016 | | |
-| 2017 | | |
-| 2018 | | |
-| 2019 | | |
-| 2020 | | |
-| 2021 | | |
-| 2022 | | |
-| 2023 | | |
-| 2024 | | |
-| 2025 | | |
+| Año  | Y-Ene | Y-Feb | Y-Mar | Y-Abr | Y-May | Y-Jun | Y-Jul | Y-Ago | Y-Sep | Y-Oct | Y-Nov | Y-Dic | G-Ene | G-Feb | G-Mar | G-Abr | G-May | G-Jun | G-Jul | G-Ago | G-Sep | G-Oct | G-Nov | G-Dic |
+|------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|
+| 2015 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2016 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2017 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2018 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2019 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2020 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2021 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2022 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2023 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2024 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2025 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-## Pasos para levantar la infraestructura
 
-### Prerequisitos
-- Docker y Docker Compose instalados
-- Cuenta de Snowflake con las tablas creadas (ver sección "Objetos en Snowflake")
 
-### 1. Configurar credenciales
-```bash
-# Copiar template y editar con credenciales reales
-cp .env.example .env
-# Editar .env con tu SF_ACCOUNT, SF_USER, SF_PASSWORD
-```
+## Manejo de problemas
 
-### 2. Construir y levantar Docker
-```bash
-docker-compose build
-docker-compose up -d
-```
+Se decidió dejar de utilizar PySpark y migrar a Snowpark, aprovechando su capacidad de ejecutar operaciones mediante query pushdown directamente en Snowflake. Sin embargo, este cambio generó algunas inconsistencias en el proceso de ingesta, por lo que fue necesario realizar ciertos ajustes manuales para asegurar la calidad y completitud de los datos.
 
-### 3. Acceder a Jupyter Lab
-Abrir en navegador: **http://localhost:8888**
-(Sin token — configurado con `--NotebookApp.token=''`)
+### Reingestar meses específico
 
-### 4. Ejecutar notebooks en orden
-1. `01_ingest_raw.ipynb` — Ingesta RAW (⚠️ toma tiempo, muchos GB)
-2. `02_enriquecimiento_y_unificacion.ipynb` — Exploración y enriquecimiento
-3. `03_construccion_obt.ipynb` — Construcción de OBT
-4. `04_validaciones_y_exploracion.ipynb` — Validaciones de calidad
-5. `05_data_analysis.ipynb` — 20 preguntas de negocio
+Tuvimos problemas al ingestar ciertos meses en especifico, por lo que tuvimos que reingestar manualmente cambiando nuestro enviroment para definir los parametros al rango especifico que queriamos reingestar, no hubo un manejo automatico de reingesta al detectar errores.
 
-### 5. Ver Spark UI
-Abrir: **http://localhost:4040** (disponible mientras hay un Job activo)
-
-### 6. Detener
-```bash
-docker-compose down
-```
-
-### Tip: probar con un solo mes primero
-Editar `.env` temporalmente:
-```
-YEAR_START=2024
-YEAR_END=2024
-MONTH_START=1
-MONTH_END=1
-```
-
-## Troubleshooting
-
-| Problema | Solución |
-|----------|----------|
-| `ClassNotFoundException: snowflake` | Verificar que el Dockerfile descarga los JARs correctamente |
-| Error de conexión Snowflake | Verificar `SF_ACCOUNT` (formato: `ORGID-ACCOUNTID`) |
-| Parquet no disponible (HTTP 403/404) | Normal para meses futuros; se registra como `skipped` en `INGESTION_LOG` |
-| Jupyter no abre | Verificar `docker-compose logs spark-notebook` |
-| OutOfMemory en Spark | Reducir `BATCH_SIZE` o procesar menos meses a la vez |
-
-## Estructura del proyecto
-
-```
-Proyecto-3/
-├── .env                                    # Credenciales reales (gitignored)
-├── .env.example                            # Template sin creds (committed)
-├── .gitignore
-├── docker-compose.yaml
-├── Dockerfile
-├── requirements.txt
-├── setup_jars.sh
-├── README.md
-├── data/                                   # Parquets temporales (gitignored)
-├── evidencias/                             # Capturas de pantalla
-└── notebooks/
-    ├── 01_ingest_raw.ipynb
-    ├── 02_enriquecimiento_y_unificacion.ipynb
-    ├── 03_construccion_obt.ipynb
-    ├── 04_validaciones_y_exploracion.ipynb
-    └── 05_data_analysis.ipynb
-```
 
 ## Checklist de aceptación
 
-- [x] Docker Compose levanta Spark y Jupyter Notebook
-- [x] Todas las credenciales/parámetros provienen de variables de ambiente (.env)
-- [ ] Cobertura 2015–2025 (Yellow/Green) cargada en RAW con matriz y conteos por lote
-- [x] `ANALYTICS.OBT_TRIPS` creada con columnas mínimas, derivadas y metadatos
-- [ ] Idempotencia verificada reingestando al menos un mes
-- [x] Validaciones básicas documentadas (nulos, rangos, coherencia)
-- [ ] 20 preguntas respondidas usando la OBT
-- [x] README claro: pasos, variables, esquema, decisiones, troubleshooting
+- [x] Docker Compose levanta Spark y Jupyter Notebook. 
+- [x] Todas las credenciales/parámetros provienen de variables de ambiente (.env). 
+- [x] Cobertura 2015–2025 (Yellow/Green) cargada en raw con matriz y conteos por lote. 
+- [x] analytics.obt_trips creada con columnas mínimas, derivadas y metadatos. 
+- [x] Idempotencia verificada reingestando al menos un mes. 
+- [x] Validaciones básicas documentadas (nulos, rangos, coherencia). 
+- [x] 20 preguntas respondidas (texto) usando la OBT. 
+- [x] README claro: pasos, variables, esquema, decisiones, troubleshooting. 
+
